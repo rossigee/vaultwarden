@@ -407,6 +407,16 @@ impl Organization {
         conn.run(move |conn| organizations::table.filter(organizations::name.eq(name)).first::<Self>(conn).ok()).await
     }
 
+    pub async fn count(conn: &DbConn) -> i64 {
+        db_run! { conn: {
+            organizations::table
+                .count()
+                .first::<i64>(conn)
+                .ok()
+                .unwrap_or(0)
+        }}
+    }
+
     pub async fn get_all(conn: &DbConn) -> Vec<Self> {
         conn.run(move |conn| organizations::table.load::<Self>(conn).expect("Error loading organizations")).await
     }
