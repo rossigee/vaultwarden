@@ -38,7 +38,7 @@ use crate::{
     error::MapResult,
     mail, sso,
     sso::{OIDCCode, OIDCCodeChallenge, OIDCCodeVerifier, OIDCState},
-    util,
+    util, metrics,
 };
 
 pub fn routes() -> Vec<Route> {
@@ -67,7 +67,8 @@ async fn login(
 
     let mut user_id: Option<UserId> = None;
 
-    let login_result = match data.grant_type.as_ref() {
+    let auth_method = data.grant_type.clone();
+    let login_result = match auth_method.as_ref() {
         "refresh_token" => {
             check_is_some(data.refresh_token.as_ref(), "refresh_token cannot be blank")?;
             refresh_login(data, &conn, &client_header.ip).await
@@ -124,6 +125,10 @@ async fn login(
         }
         t => err!("Invalid type", t),
     };
+
+    // Record authentication metrics
+    let auth_status = if login_result.is_ok() { "success" } else { "failed" };
+    metrics::increment_auth_attempts(&auth_method, auth_status);
 
     if let Some(user_id) = user_id {
         match &login_result {
