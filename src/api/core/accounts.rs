@@ -1832,6 +1832,6 @@ pub async fn purge_auth_requests(pool: DbPool) {
     if let Ok(conn) = pool.get().await {
         AuthRequest::purge_expired_auth_requests(&conn).await;
     } else {
-        error!("Failed to get DB connection while purging auth requests");
+        error!("Failed to get DB connection while purging auth requests")
     }
 }
