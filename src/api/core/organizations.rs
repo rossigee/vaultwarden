@@ -894,6 +894,10 @@ async fn get_org_details(data: OrgIdData, headers: ManagerHeadersLoose, conn: Db
         err_code!("Resource not found.", "User does not have full access", Status::NotFound.code);
     }
 
+    if !headers.membership.has_full_access() {
+        err_code!("Resource not found.", "User does not have full access", rocket::http::Status::NotFound.code);
+    }
+
     Ok(Json(json!({
         "data": get_org_details_impl(&data.organization_id, &headers.host, &headers.user.uuid, &conn).await?,
         "object": "list",
