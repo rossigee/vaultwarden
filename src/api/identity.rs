@@ -36,9 +36,9 @@ use crate::{
         },
     },
     error::MapResult,
-    mail, sso,
+    mail, metrics, sso,
     sso::{OIDCCode, OIDCCodeChallenge, OIDCCodeVerifier, OIDCState},
-    util, metrics,
+    util, CONFIG,
 };
 
 pub fn routes() -> Vec<Route> {
@@ -127,7 +127,11 @@ async fn login(
     };
 
     // Record authentication metrics
-    let auth_status = if login_result.is_ok() { "success" } else { "failed" };
+    let auth_status = if login_result.is_ok() {
+        "success"
+    } else {
+        "failed"
+    };
     metrics::increment_auth_attempts(&auth_method, auth_status);
 
     if let Some(user_id) = user_id {
