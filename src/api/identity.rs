@@ -38,7 +38,7 @@ use crate::{
     error::MapResult,
     mail, metrics, sso,
     sso::{OIDCCode, OIDCCodeChallenge, OIDCCodeVerifier, OIDCState},
-    util, CONFIG,
+    util,
 };
 
 pub fn routes() -> Vec<Route> {

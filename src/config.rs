@@ -1306,7 +1306,7 @@ fn validate_config(cfg: &ConfigItems, on_update: bool) -> Result<(), Error> {
     if cfg.enable_metrics {
         if let Some(ref token) = cfg.metrics_token {
             if token.starts_with("$argon2") {
-                if let Err(e) = argon2::password_hash::PasswordHash::new(token) {
+                if let Err(e) = argon2::password_hash::phc::PasswordHash::new(token) {
                     err!(format!("The configured Argon2 PHC in `METRICS_TOKEN` is invalid: '{e}'"))
                 }
             } else if token.trim().is_empty() {
