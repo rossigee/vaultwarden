@@ -70,7 +70,7 @@ impl<'r> FromRequest<'r> for MetricsToken {
 fn validate_metrics_token(provided: &str, configured: &str) -> bool {
     if configured.starts_with("$argon2") {
         use argon2::password_hash::PasswordVerifier;
-        match argon2::password_hash::PasswordHash::new(configured) {
+        match argon2::password_hash::phc::PasswordHash::new(configured) {
             Ok(hash) => argon2::Argon2::default().verify_password(provided.trim().as_bytes(), &hash).is_ok(),
             Err(e) => {
                 error!("Invalid Argon2 PHC in METRICS_TOKEN: {e}");
