@@ -142,11 +142,6 @@ impl Cipher {
     }
 }
 
-use crate::db::DbConn;
-
-use crate::api::EmptyResult;
-use crate::error::MapResult;
-
 #[derive(QueryableByName)]
 struct CipherCount {
     #[diesel(sql_type = diesel::sql_types::Integer)]
