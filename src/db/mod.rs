@@ -250,6 +250,18 @@ impl DbPool {
             permit: Some(permit),
         })
     }
+
+    // Number of connections currently checked out of the pool.
+    //
+    // The pool is fronted by a semaphore holding one permit per configured connection, which is
+    // acquired in `get` and released again when the returned `DbConn` is dropped. The number of
+    // permits still available is therefore an exact measure of how many connections are in use.
+    //
+    // Note that r2d2 exposes no equivalent figure for the connections it keeps idle internally,
+    // so the number of idle connections cannot be observed from here.
+    pub fn connections_in_use(&self) -> usize {
+        CONFIG.database_max_conns() as usize - self.semaphore.available_permits()
+    }
 }
 
 impl DbConnType {
@@ -397,6 +409,8 @@ pub mod schema;
 
 // Reexport the models, needs to be after the macros are defined so it can access them
 pub mod models;
+
+pub mod metrics;
 
 /// Creates a back-up of the sqlite database
 /// MySQL/MariaDB and PostgreSQL are not supported.

@@ -58,6 +58,8 @@ mod db;
 mod http_client;
 mod mail;
 mod metrics;
+#[cfg(test)]
+mod metrics_test;
 mod ratelimit;
 mod sso;
 mod sso_client;
