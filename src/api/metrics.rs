@@ -1,11 +1,15 @@
 use rocket::{
+    Route,
     http::Status,
     request::{FromRequest, Outcome, Request},
     response::content::RawText,
-    Route,
 };
 
-use crate::{auth::ClientIp, db::DbConn, CONFIG};
+use crate::{
+    CONFIG,
+    auth::ClientIp,
+    db::{DbConn, DbPool},
+};
 
 use log::error;
 
@@ -29,9 +33,8 @@ impl<'r> FromRequest<'r> for MetricsToken {
     type Error = &'static str;
 
     async fn from_request(request: &'r Request<'_>) -> Outcome<Self, Self::Error> {
-        let ip = match ClientIp::from_request(request).await {
-            Outcome::Success(ip) => ip,
-            _ => return Outcome::Error((Status::InternalServerError, "Error getting Client IP")),
+        let Outcome::Success(ip) = ClientIp::from_request(request).await else {
+            return Outcome::Error((Status::InternalServerError, "Error getting Client IP"));
         };
 
         // If no metrics token is configured, allow access
@@ -46,23 +49,20 @@ impl<'r> FromRequest<'r> for MetricsToken {
             .headers()
             .get_one("Authorization")
             .and_then(|auth| auth.strip_prefix("Bearer "))
-            .or_else(|| request.query_value::<&str>("token").and_then(|result| result.ok()));
+            .or_else(|| request.query_value::<&str>("token").and_then(Result::ok));
 
-        match provided_token {
-            Some(token) => {
-                if validate_metrics_token(token, &configured_token) {
-                    Outcome::Success(Self {
-                        ip,
-                    })
-                } else {
-                    error!("Invalid metrics token. IP: {}", ip.ip);
-                    Outcome::Error((Status::Unauthorized, "Invalid metrics token"))
-                }
-            }
-            None => {
-                error!("Missing metrics token. IP: {}", ip.ip);
-                Outcome::Error((Status::Unauthorized, "Metrics token required"))
-            }
+        let Some(token) = provided_token else {
+            error!("Missing metrics token. IP: {}", ip.ip);
+            return Outcome::Error((Status::Unauthorized, "Metrics token required"));
+        };
+
+        if validate_metrics_token(token, &configured_token) {
+            Outcome::Success(Self {
+                ip,
+            })
+        } else {
+            error!("Invalid metrics token. IP: {}", ip.ip);
+            Outcome::Error((Status::Unauthorized, "Invalid metrics token"))
         }
     }
 }
@@ -103,7 +103,7 @@ async fn get_metrics(_token: MetricsToken, mut conn: DbConn) -> Result<RawText<S
 
 /// Health check endpoint that also updates some basic metrics
 #[cfg(feature = "enable_metrics")]
-pub fn update_health_metrics(_conn: &mut DbConn) {
+pub fn update_health_metrics(pool: &DbPool) {
     // Update basic system metrics
     use std::time::SystemTime;
     static START_TIME: std::sync::OnceLock<SystemTime> = std::sync::OnceLock::new();
@@ -111,10 +111,9 @@ pub fn update_health_metrics(_conn: &mut DbConn) {
 
     crate::metrics::update_uptime(start_time);
 
-    // Update database connection metrics
-    // Note: This is a simplified version - in production you'd want to get actual pool stats
-    crate::metrics::update_db_connections("main", 1, 0);
+    // Update the connection pool gauges from the live pool
+    crate::db::metrics::update_pool_metrics(pool);
 }
 
 #[cfg(not(feature = "enable_metrics"))]
-pub fn update_health_metrics(_conn: &mut DbConn) {}
+pub fn update_health_metrics(_pool: &DbPool) {}
