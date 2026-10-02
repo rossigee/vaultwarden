@@ -4,7 +4,7 @@ use std::{
 };
 
 use rocket::{
-    Catcher, Route,
+    Catcher, Route, State,
     fs::NamedFile,
     http::ContentType,
     response::{Redirect, content::RawCss as Css, content::RawHtml as Html},
@@ -18,7 +18,7 @@ use crate::{
     auth::decode_file_download,
     crypto::sha256_hex,
     db::{
-        DbConn,
+        DbConn, DbPool,
         models::{AttachmentId, CipherId},
     },
     error::Error,
@@ -242,10 +242,10 @@ async fn attachments(cipher_id: CipherId, file_id: AttachmentId, token: String) 
 
 // We use DbConn here to let the alive healthcheck also verify the database connection.
 #[get("/alive")]
-#[allow(clippy::let_unit_value, clippy::unused_async)]
-async fn alive(mut conn: DbConn) -> Json<String> {
+#[allow(clippy::unused_async)]
+async fn alive(_conn: DbConn, pool: &State<DbPool>) -> Json<String> {
     // Update basic health metrics if metrics are enabled
-    crate::api::metrics::update_health_metrics(&mut conn);
+    crate::api::metrics::update_health_metrics(pool);
     now()
 }
 

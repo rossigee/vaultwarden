@@ -1,23 +1,28 @@
-#![allow(dead_code, unused_imports)]
+#![allow(dead_code)]
 
-#[cfg(feature = "enable_metrics")]
-use once_cell::sync::Lazy;
 #[cfg(feature = "enable_metrics")]
 use prometheus::{
-    register_gauge_vec, register_histogram_vec, register_int_counter_vec, register_int_gauge_vec, Encoder, GaugeVec,
-    HistogramVec, IntCounterVec, IntGaugeVec, TextEncoder,
+    Encoder, GaugeVec, HistogramVec, IntCounterVec, IntGaugeVec, TextEncoder, register_gauge_vec,
+    register_histogram_vec, register_int_counter_vec, register_int_gauge_vec,
 };
 
-use crate::{db::DbConn, error::Error, CONFIG};
 #[cfg(feature = "enable_metrics")]
-use std::sync::{Arc, RwLock};
+use crate::{
+    CONFIG,
+    db::models::{Cipher, Collection, Organization, User},
+};
+use crate::{db::DbConn, error::Error};
 use std::time::SystemTime;
 #[cfg(feature = "enable_metrics")]
-use std::time::UNIX_EPOCH;
+use std::{
+    collections::HashMap,
+    sync::{LazyLock, RwLock},
+    time::UNIX_EPOCH,
+};
 
 // HTTP request metrics
 #[cfg(feature = "enable_metrics")]
-static HTTP_REQUESTS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+static HTTP_REQUESTS_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
     register_int_counter_vec!(
         "vaultwarden_http_requests_total",
         "Total number of HTTP requests processed",
@@ -27,7 +32,7 @@ static HTTP_REQUESTS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
 });
 
 #[cfg(feature = "enable_metrics")]
-static HTTP_REQUEST_DURATION_SECONDS: Lazy<HistogramVec> = Lazy::new(|| {
+static HTTP_REQUEST_DURATION_SECONDS: LazyLock<HistogramVec> = LazyLock::new(|| {
     register_histogram_vec!(
         "vaultwarden_http_request_duration_seconds",
         "HTTP request duration in seconds",
@@ -39,19 +44,27 @@ static HTTP_REQUEST_DURATION_SECONDS: Lazy<HistogramVec> = Lazy::new(|| {
 
 // Database metrics
 #[cfg(feature = "enable_metrics")]
-static DB_CONNECTIONS_ACTIVE: Lazy<IntGaugeVec> = Lazy::new(|| {
-    register_int_gauge_vec!("vaultwarden_db_connections_active", "Number of active database connections", &["database"])
-        .unwrap()
+static DB_CONNECTIONS_IN_USE: LazyLock<IntGaugeVec> = LazyLock::new(|| {
+    register_int_gauge_vec!(
+        "vaultwarden_db_connections_in_use",
+        "Number of database connections currently in use",
+        &["database"]
+    )
+    .unwrap()
 });
 
 #[cfg(feature = "enable_metrics")]
-static DB_CONNECTIONS_IDLE: Lazy<IntGaugeVec> = Lazy::new(|| {
-    register_int_gauge_vec!("vaultwarden_db_connections_idle", "Number of idle database connections", &["database"])
-        .unwrap()
+static DB_CONNECTIONS_MAX: LazyLock<IntGaugeVec> = LazyLock::new(|| {
+    register_int_gauge_vec!(
+        "vaultwarden_db_connections_max",
+        "Maximum number of database connections in the pool",
+        &["database"]
+    )
+    .unwrap()
 });
 
 #[cfg(feature = "enable_metrics")]
-static DB_QUERY_DURATION_SECONDS: Lazy<HistogramVec> = Lazy::new(|| {
+static DB_QUERY_DURATION_SECONDS: LazyLock<HistogramVec> = LazyLock::new(|| {
     register_histogram_vec!(
         "vaultwarden_db_query_duration_seconds",
         "Database query duration in seconds",
@@ -62,7 +75,7 @@ static DB_QUERY_DURATION_SECONDS: Lazy<HistogramVec> = Lazy::new(|| {
 });
 // Authentication metrics
 #[cfg(feature = "enable_metrics")]
-static AUTH_ATTEMPTS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
+static AUTH_ATTEMPTS_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
     register_int_counter_vec!(
         "vaultwarden_auth_attempts_total",
         "Total number of authentication attempts",
@@ -72,38 +85,38 @@ static AUTH_ATTEMPTS_TOTAL: Lazy<IntCounterVec> = Lazy::new(|| {
 });
 
 #[cfg(feature = "enable_metrics")]
-static USER_SESSIONS_ACTIVE: Lazy<IntGaugeVec> = Lazy::new(|| {
+static USER_SESSIONS_ACTIVE: LazyLock<IntGaugeVec> = LazyLock::new(|| {
     register_int_gauge_vec!("vaultwarden_user_sessions_active", "Number of active user sessions", &["user_type"])
         .unwrap()
 });
 // Business metrics
 #[cfg(feature = "enable_metrics")]
-static USERS_TOTAL: Lazy<IntGaugeVec> =
-    Lazy::new(|| register_int_gauge_vec!("vaultwarden_users_total", "Total number of users", &["status"]).unwrap());
+static USERS_TOTAL: LazyLock<IntGaugeVec> =
+    LazyLock::new(|| register_int_gauge_vec!("vaultwarden_users_total", "Total number of users", &["status"]).unwrap());
 
 #[cfg(feature = "enable_metrics")]
-static ORGANIZATIONS_TOTAL: Lazy<IntGaugeVec> = Lazy::new(|| {
+static ORGANIZATIONS_TOTAL: LazyLock<IntGaugeVec> = LazyLock::new(|| {
     register_int_gauge_vec!("vaultwarden_organizations_total", "Total number of organizations", &["status"]).unwrap()
 });
 
 #[cfg(feature = "enable_metrics")]
-static VAULT_ITEMS_TOTAL: Lazy<IntGaugeVec> = Lazy::new(|| {
+static VAULT_ITEMS_TOTAL: LazyLock<IntGaugeVec> = LazyLock::new(|| {
     register_int_gauge_vec!("vaultwarden_vault_items_total", "Total number of vault items", &["type", "organization"])
         .unwrap()
 });
 
 #[cfg(feature = "enable_metrics")]
-static COLLECTIONS_TOTAL: Lazy<IntGaugeVec> = Lazy::new(|| {
+static COLLECTIONS_TOTAL: LazyLock<IntGaugeVec> = LazyLock::new(|| {
     register_int_gauge_vec!("vaultwarden_collections_total", "Total number of collections", &["organization"]).unwrap()
 });
 
 // System metrics
 #[cfg(feature = "enable_metrics")]
-static UPTIME_SECONDS: Lazy<GaugeVec> =
-    Lazy::new(|| register_gauge_vec!("vaultwarden_uptime_seconds", "Uptime in seconds", &["version"]).unwrap());
+static UPTIME_SECONDS: LazyLock<GaugeVec> =
+    LazyLock::new(|| register_gauge_vec!("vaultwarden_uptime_seconds", "Uptime in seconds", &["version"]).unwrap());
 
 #[cfg(feature = "enable_metrics")]
-static BUILD_INFO: Lazy<IntGaugeVec> = Lazy::new(|| {
+static BUILD_INFO: LazyLock<IntGaugeVec> = LazyLock::new(|| {
     register_int_gauge_vec!("vaultwarden_build_info", "Build information", &["version", "revision", "branch"]).unwrap()
 });
 
@@ -119,11 +132,11 @@ pub fn observe_http_request_duration(method: &str, path: &str, duration_seconds:
     HTTP_REQUEST_DURATION_SECONDS.with_label_values(&[method, path]).observe(duration_seconds);
 }
 
-/// Update database connection metrics
+/// Update the database connection pool gauges
 #[cfg(feature = "enable_metrics")]
-pub fn update_db_connections(database: &str, active: i64, idle: i64) {
-    DB_CONNECTIONS_ACTIVE.with_label_values(&[database]).set(active);
-    DB_CONNECTIONS_IDLE.with_label_values(&[database]).set(idle);
+pub fn update_db_connections(database: &str, in_use: i64, max: i64) {
+    DB_CONNECTIONS_IN_USE.with_label_values(&[database]).set(in_use);
+    DB_CONNECTIONS_MAX.with_label_values(&[database]).set(max);
 }
 
 /// Observe database query duration
@@ -151,24 +164,25 @@ struct BusinessMetricsCache {
     users_enabled: i64,
     users_disabled: i64,
     organizations: i64,
-    vault_counts: std::collections::HashMap<(String, String), i64>,
-    collection_counts: std::collections::HashMap<String, i64>,
+    vault_counts: HashMap<(String, String), i64>,
+    collection_counts: HashMap<String, i64>,
 }
 
 #[cfg(feature = "enable_metrics")]
-static BUSINESS_METRICS_CACHE: Lazy<RwLock<Option<BusinessMetricsCache>>> = Lazy::new(|| RwLock::new(None));
+static BUSINESS_METRICS_CACHE: LazyLock<RwLock<Option<BusinessMetricsCache>>> = LazyLock::new(|| RwLock::new(None));
 
 /// Check if business metrics cache is still valid
 #[cfg(feature = "enable_metrics")]
 fn is_cache_valid() -> bool {
     let cache_timeout = CONFIG.metrics_business_cache_seconds();
-    if let Ok(cache) = BUSINESS_METRICS_CACHE.read() {
-        if let Some(ref cached) = *cache {
-            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
-            return now - cached.timestamp < cache_timeout;
-        }
-    }
-    false
+    let Ok(cache) = BUSINESS_METRICS_CACHE.read() else {
+        return false;
+    };
+    let Some(cached) = &*cache else {
+        return false;
+    };
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    now.saturating_sub(cached.timestamp) < cache_timeout
 }
 
 /// Update cached business metrics
@@ -198,19 +212,14 @@ fn apply_cached_metrics(cache: &BusinessMetricsCache) {
 /// Update business metrics from database (with caching)
 #[cfg(feature = "enable_metrics")]
 pub async fn update_business_metrics(conn: &mut DbConn) -> Result<(), Error> {
-    // Check if cache is still valid
-    if is_cache_valid() {
-        // Apply cached metrics without DB query
-        if let Ok(cache) = BUSINESS_METRICS_CACHE.read() {
-            if let Some(ref cached) = *cache {
-                apply_cached_metrics(cached);
-                return Ok(());
-            }
-        }
+    // Apply cached metrics without a DB query while the cache is still valid
+    if is_cache_valid()
+        && let Ok(cache) = BUSINESS_METRICS_CACHE.read()
+        && let Some(cached) = &*cache
+    {
+        apply_cached_metrics(cached);
+        return Ok(());
     }
-
-    use crate::db::models::*;
-    use std::collections::HashMap;
 
     // Count users
     let enabled_users = User::count_enabled(conn).await;
@@ -218,7 +227,7 @@ pub async fn update_business_metrics(conn: &mut DbConn) -> Result<(), Error> {
 
     // Count organizations
     let organizations_vec = Organization::get_all(conn).await;
-    let active_orgs = organizations_vec.len() as i64;
+    let active_orgs = i64::try_from(organizations_vec.len()).unwrap_or(i64::MAX);
 
     // Count vault items by type and organization
     let vault_counts = Cipher::count_by_type_and_org(conn).await;
@@ -271,11 +280,11 @@ pub fn gather_metrics() -> Result<String, Error> {
     let metric_families = prometheus::gather();
     let mut output = Vec::new();
     if let Err(e) = encoder.encode(&metric_families, &mut output) {
-        return Err(Error::new(format!("Failed to encode metrics: {}", e), ""));
+        return Err(Error::new(format!("Failed to encode metrics: {e}"), ""));
     }
     match String::from_utf8(output) {
         Ok(s) => Ok(s),
-        Err(e) => Err(Error::new(format!("Failed to convert metrics to string: {}", e), "")),
+        Err(e) => Err(Error::new(format!("Failed to convert metrics to string: {e}"), "")),
     }
 }
 
@@ -287,7 +296,7 @@ pub fn increment_http_requests(_method: &str, _path: &str, _status: u16) {}
 pub fn observe_http_request_duration(_method: &str, _path: &str, _duration_seconds: f64) {}
 
 #[cfg(not(feature = "enable_metrics"))]
-pub fn update_db_connections(_database: &str, _active: i64, _idle: i64) {}
+pub fn update_db_connections(_database: &str, _in_use: i64, _max: i64) {}
 
 #[cfg(not(feature = "enable_metrics"))]
 pub fn observe_db_query_duration(_operation: &str, _duration_seconds: f64) {}
@@ -299,6 +308,7 @@ pub fn increment_auth_attempts(_method: &str, _status: &str) {}
 pub fn update_user_sessions(_user_type: &str, _count: i64) {}
 
 #[cfg(not(feature = "enable_metrics"))]
+#[allow(clippy::unused_async)] // signature must match the `enable_metrics` variant
 pub async fn update_business_metrics(_conn: &mut DbConn) -> Result<(), Error> {
     Ok(())
 }
@@ -311,5 +321,5 @@ pub fn update_uptime(_start_time: SystemTime) {}
 
 #[cfg(not(feature = "enable_metrics"))]
 pub fn gather_metrics() -> Result<String, Error> {
-    Ok("Metrics not enabled".to_string())
+    Ok("Metrics not enabled".to_owned())
 }

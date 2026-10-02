@@ -1019,7 +1019,7 @@ impl Cipher {
                     4 => "identity",
                     _ => "unknown",
                 };
-                counts.insert((cipher_type.to_string(), "personal".to_string()), result.count);
+                counts.insert((cipher_type.to_owned(), "personal".to_owned()), result.count);
             }
             for result in org_results {
                 let cipher_type = match result.atype {
@@ -1029,7 +1029,7 @@ impl Cipher {
                     4 => "identity",
                     _ => "unknown",
                 };
-                counts.insert((cipher_type.to_string(), result.organization_uuid), result.count);
+                counts.insert((cipher_type.to_owned(), result.organization_uuid), result.count);
             }
             counts
         }}

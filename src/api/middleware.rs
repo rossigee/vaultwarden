@@ -1,7 +1,7 @@
 /// Metrics middleware for automatic HTTP request instrumentation
 use rocket::{
-    fairing::{Fairing, Info, Kind},
     Data, Request, Response,
+    fairing::{Fairing, Info, Kind},
 };
 use std::time::Instant;
 
@@ -67,7 +67,7 @@ fn normalize_path(path: &str) -> String {
     }
 
     if normalized.is_empty() {
-        "/".to_string()
+        "/".to_owned()
     } else {
         format!("/{}", normalized.join("/"))
     }
