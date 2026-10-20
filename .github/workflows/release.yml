@@ -15,6 +15,8 @@ on:
     tags:
       # https://docs.github.com/en/actions/writing-workflows/workflow-syntax-for-github-actions#filter-pattern-cheat-sheet
       - '[1-2].[0-9]+.[0-9]+'
+      # Fork release tags, for example 1.37.5-metrics.1
+      - '[1-2].[0-9]+.[0-9]+-*'
 
 defaults:
   run:
@@ -37,8 +39,8 @@ defaults:
 jobs:
   docker-build:
     name: Build Vaultwarden containers
-    if: ${{ github.repository == 'dani-garcia/vaultwarden' }}
-    environment: 
+    if: ${{ github.repository == 'dani-garcia/vaultwarden' || vars.GHCR_REPO != '' }}
+    environment:
       name: release
       deployment: false
     permissions:
@@ -53,8 +55,8 @@ jobs:
       SOURCE_REPOSITORY_URL: "https://github.com/${{ github.repository }}"
     strategy:
       matrix:
-        arch: ["amd64", "arm64", "arm/v7", "arm/v6"]
-        base_image: ["debian","alpine"]
+        arch: ["amd64", "arm64"]
+        base_image: ["debian"]
 
     steps:
       - name: Initialize QEMU binfmt support
@@ -260,7 +262,7 @@ jobs:
       id-token: write # Needed to mint the OIDC token necessary to request a Sigstore signing certificate
     strategy:
       matrix:
-        base_image: ["debian","alpine"]
+        base_image: ["debian"]
 
     steps:
       - name: Download digests
