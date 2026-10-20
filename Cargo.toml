@@ -48,6 +48,8 @@ s3 = [
     "dep:reqsign-aws-v4",
     "dep:reqsign-core",
 ]
+# Enable Prometheus metrics endpoint
+enable_metrics = ["dep:prometheus"]
 
 # OIDC specific features
 oidc-accept-rfc3339-timestamps = ["openidconnect/accept-rfc3339-timestamps"]
@@ -244,6 +246,8 @@ semver = "1.0.28"
 # Allow overriding the default memory allocator
 # Mainly used for the musl builds, since the default musl malloc is very slow
 mimalloc = { version = "0.1.52", optional = true, default-features = false, features = ["secure"] }
+
+prometheus = { version = "0.13.1", default-features = false, optional = true }
 
 which = "8.0.6"
 
