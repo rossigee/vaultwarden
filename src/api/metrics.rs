@@ -117,3 +117,20 @@ pub fn update_health_metrics(pool: &DbPool) {
 
 #[cfg(not(feature = "enable_metrics"))]
 pub fn update_health_metrics(_pool: &DbPool) {}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_metrics_token;
+
+    #[test]
+    fn test_validate_metrics_token_plain() {
+        assert!(validate_metrics_token("s3cret", "s3cret"));
+        assert!(validate_metrics_token(" s3cret ", "s3cret"));
+        assert!(!validate_metrics_token("wrong", "s3cret"));
+    }
+
+    #[test]
+    fn test_validate_metrics_token_invalid_argon2_hash() {
+        assert!(!validate_metrics_token("anything", "$argon2id$not-a-valid-phc"));
+    }
+}
