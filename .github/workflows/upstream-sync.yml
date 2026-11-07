@@ -1,0 +1,308 @@
+name: Upstream sync
+
+# Polls upstream dani-garcia/vaultwarden for new stable release tags, rebases the
+# fork's metrics patches onto the newest one, verifies the result and pushes a
+# `<tag>-metrics.N` tag. The existing release.yml builds and pushes the GHCR image
+# from that tag. On a rebase conflict, a `metrics/<tag>-conflict` branch and an
+# issue are created and nothing is tagged.
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Upstream tag to sync (default: newest stable X.Y.Z tag)"
+        required: false
+        type: string
+      force:
+        description: "Cut a new -metrics.N even if one already exists for this tag"
+        required: false
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_URL: https://github.com/dani-garcia/vaultwarden.git
+  BOT_NAME: upstream-sync
+  BOT_EMAIL: upstream-sync@users.noreply.github.com
+
+jobs:
+  # Holds the App token. Runs git only (no build scripts). cargo metadata resolves
+  # the lockfile without compiling anything.
+  sync:
+    name: Rebase patches onto upstream tag
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      run: ${{ steps.detect.outputs.run }}
+      tag: ${{ steps.detect.outputs.tag }}
+    steps:
+      - name: Create GitHub App token
+        id: app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.SYNC_APP_ID }}
+          private-key: ${{ secrets.SYNC_APP_PRIVATE_KEY }}
+          repositories: vaultwarden
+          permission-contents: write
+          permission-workflows: write
+          permission-issues: write
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Detect target tag
+        id: detect
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_TAG}" ]; then
+            tag="${INPUT_TAG}"
+          else
+            tag="$(git ls-remote --tags --refs "${UPSTREAM_URL}" \
+              | awk -F/ '{print $NF}' \
+              | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+              | sort -V | tail -n1)"
+          fi
+          if ! printf '%s' "${tag}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Invalid upstream tag: ${tag}"
+            exit 1
+          fi
+          if ! git ls-remote --tags --refs "${UPSTREAM_URL}" "refs/tags/${tag}" | grep -q .; then
+            echo "::error::Tag ${tag} does not exist upstream"
+            exit 1
+          fi
+          existing="$(git ls-remote --tags origin \
+            | awk -F/ '{print $NF}' \
+            | sed -n -E "/^${tag//./\\.}-metrics\.[0-9]+$/p")"
+          run=true
+          if [ -n "${existing}" ] && [ "${INPUT_FORCE}" != "true" ]; then
+            echo "Tag ${tag} already has fork release(s): ${existing}; nothing to do"
+            run=false
+          fi
+          {
+            echo "tag=${tag}"
+            echo "run=${run}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Fetch upstream tag and main
+        if: steps.detect.outputs.run == 'true'
+        env:
+          TAG: ${{ steps.detect.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git remote add upstream "${UPSTREAM_URL}"
+          git fetch --no-tags upstream "+refs/tags/${TAG}:refs/tags/${TAG}"
+          git fetch --no-tags upstream "+refs/heads/main:refs/remotes/upstream/main"
+
+      - name: Rebase patches onto upstream tag
+        id: rebase
+        if: steps.detect.outputs.run == 'true'
+        env:
+          TAG: ${{ steps.detect.outputs.tag }}
+        run: |
+          set -euo pipefail
+          base="$(git merge-base main upstream/main)"
+          echo "Patch base: ${base}"
+          git switch -c "metrics/${TAG}" main
+
+          git_dir="$(git rev-parse --git-dir)"
+          in_rebase() { [ -d "${git_dir}/rebase-merge" ] || [ -d "${git_dir}/rebase-apply" ]; }
+
+          done=false
+          if git -c user.name="${BOT_NAME}" -c user.email="${BOT_EMAIL}" rebase --onto "${TAG}" "${base}"; then
+            done=true
+          fi
+          while [ "${done}" = false ]; do
+            unmerged="$(git diff --name-only --diff-filter=U)"
+            if [ -z "${unmerged}" ] || [ "${unmerged}" != "Cargo.lock" ]; then
+              echo "::error::Unresolvable rebase conflict in: ${unmerged:-<none>}"
+              {
+                echo "conflicts<<EOF"
+                echo "${unmerged}"
+                echo "EOF"
+              } >> "${GITHUB_OUTPUT}"
+              exit 1
+            fi
+            # Take upstream's lockfile, then let cargo re-add the patch's new
+            # dependencies while keeping every locked version. No build scripts run.
+            git checkout --ours -- Cargo.lock
+            cargo metadata --format-version 1 > /dev/null
+            git add Cargo.lock
+            if git -c core.editor=true -c user.name="${BOT_NAME}" -c user.email="${BOT_EMAIL}" rebase --continue; then
+              done=true
+            fi
+          done
+          if in_rebase; then
+            echo "::error::Rebase still in progress"
+            exit 1
+          fi
+          git log --oneline "${TAG}..HEAD"
+
+      - name: Refresh Cargo.lock
+        if: steps.detect.outputs.run == 'true'
+        env:
+          TAG: ${{ steps.detect.outputs.tag }}
+        run: |
+          set -euo pipefail
+          cargo metadata --format-version 1 > /dev/null
+          if ! git diff --quiet -- Cargo.lock; then
+            git add Cargo.lock
+            git -c user.name="${BOT_NAME}" -c user.email="${BOT_EMAIL}" commit -m "chore: regenerate Cargo.lock after rebase onto ${TAG}"
+          fi
+
+      - name: Bundle rebased branch
+        if: steps.detect.outputs.run == 'true'
+        env:
+          TAG: ${{ steps.detect.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git bundle create "${RUNNER_TEMP}/rebased.bundle" "metrics/${TAG}" "${TAG}"
+          git bundle verify "${RUNNER_TEMP}/rebased.bundle"
+
+      - name: Upload bundle
+        if: steps.detect.outputs.run == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rebased-bundle
+          path: ${{ runner.temp }}/rebased.bundle
+          retention-days: 3
+
+      - name: Push conflict branch
+        if: failure() && steps.detect.outputs.run == 'true' && steps.rebase.outcome == 'failure'
+        env:
+          TAG: ${{ steps.detect.outputs.tag }}
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          set -euo pipefail
+          git add -A
+          git -c user.name="${BOT_NAME}" -c user.email="${BOT_EMAIL}" commit -m "Unresolved rebase of metrics patches onto ${TAG}"
+          git push "https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "HEAD:refs/heads/metrics/${TAG}-conflict" --force
+
+      - name: Open or update issue
+        if: failure() && steps.detect.outputs.run == 'true' && steps.rebase.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          TAG: ${{ steps.detect.outputs.tag }}
+          CONFLICTS: ${{ steps.rebase.outputs.conflicts }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="Upstream sync to ${TAG} needs manual resolution"
+          existing="$(gh issue list --state open --search "in:title \"${title}\"" --json number --jq '.[0].number')"
+          body="Rebasing the metrics patches onto upstream ${TAG} hit conflicts.
+
+          Branch with conflict markers: metrics/${TAG}-conflict
+          Run: ${RUN_URL}
+
+          Conflicting files:
+          ${CONFLICTS}
+
+          Resolve on the conflict branch, then push metrics/${TAG} and tag ${TAG}-metrics.N."
+          if [ -n "${existing}" ]; then
+            gh issue comment "${existing}" --body "${body}"
+          else
+            gh issue create --title "${title}" --body "${body}"
+          fi
+
+  # No secrets, no token. Runs cargo against the rebased code, which may execute
+  # build scripts and test code from upstream and the patch.
+  verify:
+    name: Verify rebased build
+    needs: sync
+    if: needs.sync.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ needs.sync.outputs.tag }}
+    steps:
+      - name: Download bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: rebased-bundle
+          path: ${{ runner.temp }}/bundle
+
+      - name: Clone rebased branch
+        run: |
+          set -euo pipefail
+          git clone --branch "metrics/${TAG}" "${RUNNER_TEMP}/bundle/rebased.bundle" "${RUNNER_TEMP}/work"
+          echo "WORK=${RUNNER_TEMP}/work" >> "${GITHUB_ENV}"
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends openssl build-essential libmariadb-dev-compat libpq-dev libssl-dev pkg-config
+
+      - name: Run cargo tests
+        working-directory: ${{ env.WORK }}
+        run: cargo test --locked --profile ci --features sqlite,mysql,postgresql,enable_mimalloc,s3
+
+  # Holds the App token. Runs only after verify has passed.
+  publish:
+    name: Publish fork tag
+    needs: [sync, verify]
+    if: needs.sync.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    environment: release
+    permissions: {}
+    env:
+      TAG: ${{ needs.sync.outputs.tag }}
+    steps:
+      - name: Create GitHub App token
+        id: app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.SYNC_APP_ID }}
+          private-key: ${{ secrets.SYNC_APP_PRIVATE_KEY }}
+          repositories: vaultwarden
+          permission-contents: write
+          permission-workflows: write
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app.outputs.token }}
+
+      - name: Download bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: rebased-bundle
+          path: ${{ runner.temp }}/bundle
+
+      - name: Push branch, main and tag
+        run: |
+          set -euo pipefail
+          git fetch --no-tags "${RUNNER_TEMP}/bundle/rebased.bundle" \
+            "+refs/heads/metrics/${TAG}:refs/remotes/bundle/metrics/${TAG}" \
+            "+refs/tags/${TAG}:refs/tags/${TAG}"
+          new_sha="$(git rev-parse "refs/remotes/bundle/metrics/${TAG}")"
+
+          remote_branch="$(git ls-remote --heads origin "refs/heads/metrics/${TAG}" | cut -f1)"
+          remote_main="$(git ls-remote --heads origin refs/heads/main | cut -f1)"
+
+          last_n="$(git ls-remote --tags origin \
+            | awk -F/ '{print $NF}' \
+            | sed -n -E "s/^${TAG//./\\.}-metrics\.([0-9]+)$/\1/p" \
+            | sort -n | tail -n1)"
+          n=$(( ${last_n:-0} + 1 ))
+          fork_tag="${TAG}-metrics.${n}"
+
+          git push --atomic \
+            --force-with-lease="refs/heads/metrics/${TAG}:${remote_branch}" \
+            --force-with-lease="refs/heads/main:${remote_main}" \
+            origin "${new_sha}:refs/heads/metrics/${TAG}" "${new_sha}:refs/heads/main"
+          git tag "${fork_tag}" "${new_sha}"
+          git push origin "refs/tags/${fork_tag}"
+          echo "Pushed ${fork_tag}"
