@@ -6264,7 +6264,6 @@ dependencies = [
  "nix",
  "num-derive",
  "num-traits",
- "once_cell",
  "opendal",
  "opendal-http-transport-reqwest",
  "openidconnect",
