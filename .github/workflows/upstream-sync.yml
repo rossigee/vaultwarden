@@ -38,6 +38,7 @@ jobs:
   sync:
     name: Rebase patches onto upstream tag
     runs-on: ubuntu-latest
+    environment: release
     permissions: {}
     outputs:
       run: ${{ steps.detect.outputs.run }}
