@@ -122,7 +122,7 @@ jobs:
           in_rebase() { [ -d "${git_dir}/rebase-merge" ] || [ -d "${git_dir}/rebase-apply" ]; }
 
           done=false
-          if git -c user.name="${BOT_NAME}" -c user.email="${BOT_EMAIL}" rebase --onto "${TAG}" "${base}"; then
+          if git -c user.name="${BOT_NAME}" -c user.email="${BOT_EMAIL}" rebase --signoff --onto "${TAG}" "${base}"; then
             done=true
           fi
           while [ "${done}" = false ]; do
@@ -160,7 +160,7 @@ jobs:
           cargo metadata --format-version 1 > /dev/null
           if ! git diff --quiet -- Cargo.lock; then
             git add Cargo.lock
-            git -c user.name="${BOT_NAME}" -c user.email="${BOT_EMAIL}" commit -m "chore: regenerate Cargo.lock after rebase onto ${TAG}"
+            git -c user.name="${BOT_NAME}" -c user.email="${BOT_EMAIL}" commit --signoff -m "chore: regenerate Cargo.lock after rebase onto ${TAG}"
           fi
 
       - name: Bundle rebased branch
@@ -188,7 +188,7 @@ jobs:
         run: |
           set -euo pipefail
           git add -A
-          git -c user.name="${BOT_NAME}" -c user.email="${BOT_EMAIL}" commit -m "Unresolved rebase of metrics patches onto ${TAG}"
+          git -c user.name="${BOT_NAME}" -c user.email="${BOT_EMAIL}" commit --signoff -m "Unresolved rebase of metrics patches onto ${TAG}"
           git push "https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
             "HEAD:refs/heads/metrics/${TAG}-conflict" --force
 
