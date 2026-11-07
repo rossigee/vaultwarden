@@ -113,8 +113,6 @@ jobs:
           TAG: ${{ steps.detect.outputs.tag }}
         run: |
           set -euo pipefail
-          export GIT_COMMITTER_NAME="${BOT_NAME}" GIT_COMMITTER_EMAIL="${BOT_EMAIL}"
-          export GIT_AUTHOR_NAME="${BOT_NAME}" GIT_AUTHOR_EMAIL="${BOT_EMAIL}"
           base="$(git merge-base main upstream/main)"
           echo "Patch base: ${base}"
           git switch -c "metrics/${TAG}" main
@@ -123,7 +121,7 @@ jobs:
           in_rebase() { [ -d "${git_dir}/rebase-merge" ] || [ -d "${git_dir}/rebase-apply" ]; }
 
           done=false
-          if git rebase --onto "${TAG}" "${base}"; then
+          if git -c user.name="${BOT_NAME}" -c user.email="${BOT_EMAIL}" rebase --onto "${TAG}" "${base}"; then
             done=true
           fi
           while [ "${done}" = false ]; do
@@ -142,7 +140,7 @@ jobs:
             git checkout --ours -- Cargo.lock
             cargo metadata --format-version 1 > /dev/null
             git add Cargo.lock
-            if GIT_EDITOR=true git rebase --continue; then
+            if git -c core.editor=true -c user.name="${BOT_NAME}" -c user.email="${BOT_EMAIL}" rebase --continue; then
               done=true
             fi
           done
@@ -151,6 +149,18 @@ jobs:
             exit 1
           fi
           git log --oneline "${TAG}..HEAD"
+
+      - name: Refresh Cargo.lock
+        if: steps.detect.outputs.run == 'true'
+        env:
+          TAG: ${{ steps.detect.outputs.tag }}
+        run: |
+          set -euo pipefail
+          cargo metadata --format-version 1 > /dev/null
+          if ! git diff --quiet -- Cargo.lock; then
+            git add Cargo.lock
+            git -c user.name="${BOT_NAME}" -c user.email="${BOT_EMAIL}" commit -m "chore: regenerate Cargo.lock after rebase onto ${TAG}"
+          fi
 
       - name: Bundle rebased branch
         if: steps.detect.outputs.run == 'true'
@@ -176,10 +186,8 @@ jobs:
           APP_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           set -euo pipefail
-          export GIT_COMMITTER_NAME="${BOT_NAME}" GIT_COMMITTER_EMAIL="${BOT_EMAIL}"
-          export GIT_AUTHOR_NAME="${BOT_NAME}" GIT_AUTHOR_EMAIL="${BOT_EMAIL}"
           git add -A
-          git commit -m "Unresolved rebase of metrics patches onto ${TAG}"
+          git -c user.name="${BOT_NAME}" -c user.email="${BOT_EMAIL}" commit -m "Unresolved rebase of metrics patches onto ${TAG}"
           git push "https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
             "HEAD:refs/heads/metrics/${TAG}-conflict" --force
 
